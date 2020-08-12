@@ -27,10 +27,9 @@ class TerminateReason(Enum):
 # TODO: stop robot if connection is lost
 
 
-class ControlPrimitives:
+class Robot:
     """
-    Class containing simple control primitives
-
+    Class containing simple control primitives for a robot
     """
 
     def __init__(self, recv: RTDEReceiveInterface,
@@ -74,7 +73,7 @@ class ControlPrimitives:
             raise ValueError('{} not recognized as frame'.format(base_t_frame))
         return base_t_frame
 
-    def zero_ft_sensor(self, delay=0.5):
+    def zero_ft_sensor(self, delay=0.2):
         # TODO: what is the 'correct' delay?
         time.sleep(delay)
         self.ctrl.zeroFtSensor()
@@ -86,7 +85,7 @@ class ControlPrimitives:
             speed = (*speed, 0, 0, 0)
         base_t_frame = self._get_base_t_frame(base_t_frame)
         start_time = time.time()
-        p_init = self.base_t_tcp().t
+        p_init = self.base_t_tcp().p
         self.ctrl.speedL(base_t_frame.rotate(speed), acceleration)
         try:
             while True:
@@ -95,7 +94,7 @@ class ControlPrimitives:
                     raise TimeoutError()
                 if np.any(np.abs(self.ft_tcp()) > stop_ft):
                     break
-                p_now = self.base_t_tcp().t
+                p_now = self.base_t_tcp().p
                 travel = np.linalg.norm(p_now - p_init)
                 if travel > stop_travel:
                     return TerminateReason.TRAVEL_LIMIT
@@ -116,7 +115,7 @@ class ControlPrimitives:
         try:
             base_t_tcp_init = self.base_t_tcp()
             self.ctrl.forceModeStart(
-                base_t_tcp_init.as_xyz_rotvec(),
+                base_t_tcp_init,
                 [0, 0, 1, 0, 0, 0], [0, 0, push_force, 0, 0, 0],
                 2, [0.05] * 6
             )
@@ -138,7 +137,7 @@ class ControlPrimitives:
                     return TerminateReason.STOP_CONDITION
                 tcp_start_t_tcp_next = Transform(p=(x, y, 0))
                 base_t_tcp_next = base_t_tcp_init @ tcp_start_t_tcp_next
-                self.ctrl.servoL(base_t_tcp_next.as_xyz_rotvec(), 0.5, 0.25, self.dt, lookahead_time, gain)
+                self.ctrl.servoL(base_t_tcp_next, 0.5, 0.25, self.dt, lookahead_time, gain)
                 loop_duration = time.time() - loop_start
                 time.sleep(max(0., self.dt - loop_duration))
         finally:
@@ -156,14 +155,14 @@ class ControlPrimitives:
             x, y = utils.sample_hyper_sphere_volume(r=radius, d=2)
             tcp_init_t_tcp_next = Transform(p=(x, y, 0))
             base_t_tcp_next = base_t_tcp_init @ tcp_init_t_tcp_next
-            self.ctrl.moveL(base_t_tcp_next.as_xyz_rotvec(), move_speed, move_acc)
+            self.ctrl.moveL(base_t_tcp_next, move_speed, move_acc)
             try:
                 self.speed_until_ft((0, 0, poke_speed), max_travel=depth)
             except DeviatingMotionError:
                 return TerminateReason.TRAVEL_LIMIT
             if stop_condition():
                 return TerminateReason.STOP_CONDITION
-            self.ctrl.moveL(base_t_tcp_next.as_xyz_rotvec(), move_speed, move_acc)
+            self.ctrl.moveL(base_t_tcp_next, move_speed, move_acc)
 
     def insert_force(self, push_force=10., rot_compliant=True, nudge_scale=.5, nudge_frequency=1.,
                      limits=(1., 1., 1., 0.2, 0.2, 0.2), damping=0.01, gain_scaling=1.,
@@ -173,8 +172,7 @@ class ControlPrimitives:
         start = time.time()
         self.ctrl.forceModeSetDamping(damping)
         self.ctrl.forceModeSetGainScaling(gain_scaling)
-        compliance = np.ones(6)
-        compliance[3:] = int(rot_compliant)
+        compliance = [1, 1, 1] + [int(rot_compliant)] * 3
         base_t_tcp_init = self.base_t_tcp()
         try:
             while True:
@@ -184,7 +182,7 @@ class ControlPrimitives:
                 cur_duration = time.time() - start
                 if cur_duration > timeout:
                     raise TimeoutError()
-                if np.linalg.norm(tcp_init_t_tcp_now.r.as_rotvec()) > max_angle_diff:
+                if np.linalg.norm(tcp_init_t_tcp_now.rotvec) > max_angle_diff:
                     raise DeviatingMotionError()
                 if depth_stop is not None:
                     if tcp_init_t_tcp_now.t[2] > depth_stop:
@@ -199,7 +197,7 @@ class ControlPrimitives:
                 phi = theta / 9.5  # TODO: hyper parameter
                 xy = np.array((np.cos(phi), np.sin(phi))) * np.sin(theta) * nudge_scale
                 self.ctrl.forceModeStart(
-                    base_t_tcp_now.as_xyz_rotvec(),
+                    base_t_tcp_now,
                     compliance, [0, 0, push_force, *xy, 0],
                     2, limits
                 )

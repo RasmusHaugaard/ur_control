@@ -1,3 +1,3 @@
-from .control_primitives import ControlPrimitives
-from .control_primitives import TerminateReason
-from .control_primitives import DeviatingMotionError
+from .robot import Robot
+from .robot import TerminateReason
+from .robot import DeviatingMotionError
