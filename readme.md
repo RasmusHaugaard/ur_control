@@ -5,11 +5,6 @@ Control primitives based on `ur_rtde` and `transform3d`.
 #### install
 
 ```
-$ pip install ur_control
-```
-
-#### usage
-```python
-
+$ pip install git+https://github.com/RasmusHaugaard/ur_control.git
 ```
 
