@@ -41,7 +41,7 @@ class Robot:
     @classmethod
     def from_ip(cls, ip: str, control_frequency=250., no_recv=False, no_ctrl=False):
         return cls(
-            recv=None if no_recv else RTDEReceiveInterface(ip),
+            recv=None if no_recv else RTDEReceiveInterface(ip, []),
             ctrl=None if no_ctrl else RTDEControlInterface(ip),
             control_frequency=control_frequency,
         )
@@ -118,9 +118,10 @@ class Robot:
         ur_path = []
         for i in range(len(path)):
             wp = path[i]
+            assert len(wp.p) == 6
             max_possible_blend = min(dists[i], dists[i + 1]) / 2
-            blend = min(max_possible_blend * wp.max_blend_ratio, wp.max_blend)
-            ur_path.append([wp.p, wp.speed, wp.acc, blend])
+            blend = min(max_possible_blend * max(0, min(wp.max_blend_ratio, 0.999)), wp.max_blend)
+            ur_path.append([*wp.p, wp.speed, wp.acc, blend])
 
         return ur_path
 
