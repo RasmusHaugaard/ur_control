@@ -39,16 +39,22 @@ class Robot:
         self.speed_j, self.acc_j = speed_j, acc_j
 
     @classmethod
-    def from_ip(cls, ip: str, control_frequency=250., no_recv=False, no_ctrl=False):
+    def from_ip(cls, ip: str, no_recv=False, no_ctrl=False,
+                control_frequency=250., speed_l=0.25, acc_l=1.2, speed_j=1.05, acc_j=1.4):
         return cls(
             recv=None if no_recv else RTDEReceiveInterface(ip, []),
             ctrl=None if no_ctrl else RTDEControlInterface(ip),
             control_frequency=control_frequency,
+            speed_l=speed_l, acc_l=acc_l,
+            speed_j=speed_j, acc_j=acc_j
         )
 
     @property
     def ctrl_dt(self):
         return 1 / self.control_frequency
+
+    def q(self):
+        return np.array(self.recv.getActualQ())
 
     def base_t_tcp(self):
         """Returns the tcp frame seen in the base frame"""
@@ -61,7 +67,7 @@ class Robot:
 
     def base_ft_tcp(self):
         """Returns the force torque measured in the tcp frame but seen in the base frame"""
-        return self.recv.getActualTCPForce()
+        return np.array(self.recv.getActualTCPForce())
 
     def a_ft_b(self, base_t_a: Transform, base_t_b: Transform,
                base_t_tcp: Transform = None):
@@ -81,7 +87,8 @@ class Robot:
         base_t_frame = base_t_tcp @ tcp_t_frame
         return self.a_ft_b(base_t_frame, base_t_frame, base_t_tcp=base_t_tcp)
 
-    def _parse_path(self, path, space='joint', speed=None, acc=None, max_blend=0., max_blend_ratio=1.):
+    def _process_path(self, path, space='joint', speed=None, acc=None, max_blend=0., max_blend_ratio=1.):
+        """Processes a path before providing it to moveJ or moveL"""
         path = list(path)
         if space == 'joint':
             speed = self.speed_j if speed is None else speed
@@ -122,16 +129,38 @@ class Robot:
             max_possible_blend = min(dists[i], dists[i + 1]) / 2
             blend = min(max_possible_blend * max(0, min(wp.max_blend_ratio, 0.999)), wp.max_blend)
             ur_path.append([*wp.p, wp.speed, wp.acc, blend])
-
         return ur_path
 
     def move_l(self, path, speed=None, acc=None, max_blend=0., max_blend_ratio=1.):
-        ur_path = self._parse_path(path, 'cartesian', speed, acc, max_blend, max_blend_ratio)
+        ur_path = self._process_path(path, 'cartesian', speed, acc, max_blend, max_blend_ratio)
         assert self.ctrl.moveL(ur_path)
 
     def move_j(self, path, speed=None, acc=None, max_blend=0., max_blend_ratio=1.):
-        ur_path = self._parse_path(path, 'joint', speed, acc, max_blend, max_blend_ratio)
+        ur_path = self._process_path(path, 'joint', speed, acc, max_blend, max_blend_ratio)
         assert self.ctrl.moveJ(ur_path)
+
+    def move_l_qlim(self, base_t_tcp_desired: Transform, speed_l=None, acc_l=None, speed_j=None, acc_q=None,
+                    lookahead_time=0.1, gain=600):
+        """Moves linear in cartesian space but also limits the speed in joint space"""
+        speed_l = self.speed_l if speed_l is None else speed_l
+        acc_l = self.acc_l if acc_l is None else acc_l
+        speed_j = self.speed_j if speed_j is None else speed_j
+        acc_q = self.acc_q if acc_q is None else acc_q
+
+        base_t_tcp_start = self.base_t_tcp()
+        tcp_start_t_tcp_desired = base_t_tcp_start.inv @ base_t_tcp_desired
+        s = 0
+        while utils.rate(self.control_frequency) and s < 1:
+            s_delta = 0.1  # TODO: find based on speed_l and acc_l
+            base_t_tcp_next = base_t_tcp_start @ tcp_start_t_tcp_desired * (s + s_delta)
+            q_now = self.q()
+            q_next = self.ctrl.getInverseKinematics(base_t_tcp_next)
+            q_delta = q_next - q_now
+            q_speed = np.linalg.norm(q_delta) / self.ctrl_dt
+            factor = min(1, speed_j / (q_speed + 1e-9))
+            q_next = q_now + q_delta * factor
+            s = s + s_delta * factor
+            self.ctrl.servoJ(q_next)
 
 
 class Waypoint:
